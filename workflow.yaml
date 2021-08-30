@@ -11,35 +11,30 @@ version: '0.1'
 
 final_output:
 - build
-  #- quantify
+- align
+- sort
+- quantify
 
 # inputs
 inputs:
   reads:
-    label: Input Directory
     description: Input directory containing FASTQ files
     default: ./data/reads
   gtf:
-    label: Input GTF
     description: GTF file describing transcriptome
     default: ./data/gtf/sample.gtf
   reference:
-    label: Reference Sequence FASTA
     description: Reference sequence FASTA file
     default: ./data/reference/sample.fa
 
 # parameters
 parameters: 
   threads:
-    label: CPU Threads
     description: Number of CPU threads for alignment
     default: 2
 
 # apps
 apps:
-  #hisat2-build:
-  #  git: https://github.com/geneflow-apps/hisat2-build-gf3
-  #  version: '2.2.1-01'
   hisat2-build:
     inputs:
       reference:
@@ -60,19 +55,84 @@ apps:
             hisat2-build ^${REFERENCE_FULL} ^${OUTPUT_FULL}/${OUTPUT_BASE}
             > ${LOG_FULL}/${OUTPUT_BASE}-hisat2-build.stdout
             2> ${LOG_FULL}/${OUTPUT_BASE}-hisat2-build.stderr
-      post:
 
+  hisat2-align:
+    inputs:
+      input:
+      pair:
+      reference:
+        post:
+        - run: INDEX_FILE=$(ls ${REFERENCE_FULL} | grep '.1.ht2$')
+        - if:
+          - not_defined: ${INDEX_FILE}
+          run: fail 'Invalid reference index'
+        - run: INDEX_PREFIX=\"${INDEX_FILE%.1.*}\"
+    parameters:
+      threads:
+      output:
+    execution:
+      pre:
+      - run: mkdir -p ${LOG_FULL}
+      methods:
+      - name: docker
+        if: 
+        - in_path: docker
+        commands:
+        - run: echo ${REFERENCE_FULL}/${INDEX_PREFIX}
+        - type: docker
+          image: quay.io/biocontainers/hisat2:2.2.1--h1b792b2_3
+          run: >-
+            hisat2 -x ^${REFERENCE_FULL}/${INDEX_PREFIX} -p ${THREADS} -1 ^${INPUT} -2 ^${PAIR} 
+            > ${OUTPUT_FULL}
+            2> ${LOG_FULL}/${OUTPUT_BASE}-hisat2-align.stderr
 
+  bam-sort:
+    inputs:
+      input:
+    parameters:
+      sort_order:
+        default: coordinate
+      output:
+    execution:
+      pre:
+      - run: mkdir -p ${LOG_FULL}
+      methods:
+      - name: docker
+        if:
+        - in_path: docker
+        commands:
+        - if:
+          - str_equal: ['${SORT_ORDER}', 'queryname']
+          type: docker
+          image: quay.io/biocontainers/samtools:1.10--h2e538c0_3
+          run: samtools sort ^${INPUT} -n > ${OUTPUT_FULL} 2> ${LOG_FULL}/${OUTPUT_BASE}-samtools-sort.stderr
+          else: 
+          - type: docker
+            image: quay.io/biocontainers/samtools:1.10--h2e538c0_3
+            run: samtools sort ^${INPUT} > ${OUTPUT_FULL} 2> ${LOG_FULL}/${OUTPUT_BASE}-samtools-sort.stderr
 
-  #hisat2-align:
-  #  git: https://gitlab.com/geneflow/apps/hisat2-align-gf2.git
-  #  version: '2.2.1-01'
-  #bam-sort:
-  #  git: https://gitlab.com/geneflow/apps/bam-sort-gf2.git
-  #  version: '1.10-07'
-  #stringtie:
-  #  git: https://gitlab.com/geneflow/apps/stringtie-gf2.git
-  #  version: '2.1.6-01'
+  stringtie:
+     inputs:
+       bam:
+       gtf:
+     parameters:
+       output:
+     execution:
+       pre:
+       - run: mkdir -p ${OUTPUT_FULL}
+       - run: mkdir -p ${LOG_FULL}
+       methods:
+       - name: docker
+         if:
+         - in_path: docker
+         commands:
+         - type: docker
+           image: quay.io/biocontainers/stringtie:2.1.6--h978d192_0
+           run: >-
+             stringtie -G ^${GTF} --rf -e -B -o ^${OUTPUT_FULL}/${OUTPUT_BASE}_final_transcript.gtf
+             -A ^${OUTPUT_FULL}/${OUTPUT_BASE}.tsv -C ^${OUTPUT_FULL}/${OUTPUT_BASE}_final_reference.gtf ^${BAM} 
+             > ${LOG_FULL}/${OUTPUT_BASE}-stringtie.stdout
+             2> ${LOG_FULL}/${OUTPUT_BASE}-stringtie.stderr
 
 # steps
 steps:
@@ -82,39 +142,38 @@ steps:
     template:
       reference: ${workflow->reference}
       output: reference
-    publish: true
 
-  #align:
-  #  app: hisat2-align
-  #  depend: [ "build" ]
-  #  map:
-  #    uri: ${workflow->reads}
-  #    regex: (.*)_(R|)1(.*)\.((fastq|fq)(|\.gz))$
-  #  template:
-  #    input: ${workflow->reads}/${1}_${2}1${3}.${4}
-  #    pair: ${workflow->reads}/${1}_${2}2${3}.${4}
-  #    reference: ${build->output}/reference
-  #    threads: ${workflow->threads}
-  #    output: ${1}.sam
+  align:
+    app: hisat2-align
+    depend: [ "build" ]
+    map:
+      uri: ${workflow->reads}
+      regex: (.*)_(R|)1(.*)\.((fastq|fq)(|\.gz))$
+    template:
+      input: ${workflow->reads}/${1}_${2}1${3}.${4}
+      pair: ${workflow->reads}/${1}_${2}2${3}.${4}
+      reference: ${build->output}/reference
+      threads: ${workflow->threads}
+      output: ${1}.sam
 
-  #sort:
-  #  app: bam-sort
-  #  depend: [ "align" ]
-  #  map:
-  #    uri: ${align->output}
-  #    regex: (.*).sam
-  #  template:
-  #    input: ${align->output}/${1}.sam
-  #    output: ${1}.bam
+  sort:
+    app: bam-sort
+    depend: [ "align" ]
+    map:
+      uri: ${align->output}
+      regex: (.*).sam
+    template:
+      input: ${align->output}/${1}.sam
+      output: ${1}.bam
 
-  #quantify:
-  #  app: stringtie
-  #  depend: [ "sort" ]
-  #  map:
-  #    uri: ${sort->output}
-  #    regex: (.*).bam
-  #  template:
-  #    bam: ${sort->output}/${1}.bam
-  #    gtf: ${workflow->gtf}
-  #    output: ${1}
+  quantify:
+    app: stringtie
+    depend: [ "sort" ]
+    map:
+      uri: ${sort->output}
+      regex: (.*).bam
+    template:
+      bam: ${sort->output}/${1}.bam
+      gtf: ${workflow->gtf}
+      output: ${1}
 ...
