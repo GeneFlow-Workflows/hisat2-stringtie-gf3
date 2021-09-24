@@ -9,11 +9,9 @@ description: RNAseq workflow using HISAT2 and StringTie
 git: https://github.com/geneflow-workflows/hisat2-stringtie-gf3
 version: '0.1'
 
-final_output:
+publish:
 - build
 - align
-- sort
-- quantify
 
 # inputs
 inputs:
@@ -35,11 +33,13 @@ parameters:
 
 # apps
 apps:
-  hisat2-build:
+  hisat2_build:
     inputs:
       reference:
     parameters:
       output:
+    images:
+      hisat2_docker: quay.io/biocontainers/hisat2:2.2.1--h1b792b2_3
     execution:
       pre:
       - run: mkdir -p ${OUTPUT_FULL}
@@ -50,13 +50,13 @@ apps:
         - in_path: docker
         commands:
         - type: docker
-          image: quay.io/biocontainers/hisat2:2.2.1--h1b792b2_3
+          image: hisat2_docker
           run: >-
             hisat2-build ^${REFERENCE_FULL} ^${OUTPUT_FULL}/${OUTPUT_BASE}
             > ${LOG_FULL}/${OUTPUT_BASE}-hisat2-build.stdout
             2> ${LOG_FULL}/${OUTPUT_BASE}-hisat2-build.stderr
 
-  hisat2-align:
+  hisat2_align:
     inputs:
       input:
       pair:
@@ -70,6 +70,8 @@ apps:
     parameters:
       threads:
       output:
+    images:
+      hisat2_docker: quay.io/biocontainers/hisat2:2.2.1--h1b792b2_3
     execution:
       pre:
       - run: mkdir -p ${LOG_FULL}
@@ -80,19 +82,21 @@ apps:
         commands:
         - run: echo ${REFERENCE_FULL}/${INDEX_PREFIX}
         - type: docker
-          image: quay.io/biocontainers/hisat2:2.2.1--h1b792b2_3
+          image: hisat2_docker
           run: >-
             hisat2 -x ^${REFERENCE_FULL}/${INDEX_PREFIX} -p ${THREADS} -1 ^${INPUT} -2 ^${PAIR} 
             > ${OUTPUT_FULL}
             2> ${LOG_FULL}/${OUTPUT_BASE}-hisat2-align.stderr
 
-  bam-sort:
+  bam_sort:
     inputs:
       input:
     parameters:
       sort_order:
         default: coordinate
       output:
+    images:
+      samtools_docker: quay.io/biocontainers/samtools:1.10--h2e538c0_3
     execution:
       pre:
       - run: mkdir -p ${LOG_FULL}
@@ -104,11 +108,11 @@ apps:
         - if:
           - str_equal: ['${SORT_ORDER}', 'queryname']
           type: docker
-          image: quay.io/biocontainers/samtools:1.10--h2e538c0_3
+          image: samtools_docker
           run: samtools sort ^${INPUT} -n > ${OUTPUT_FULL} 2> ${LOG_FULL}/${OUTPUT_BASE}-samtools-sort.stderr
           else: 
           - type: docker
-            image: quay.io/biocontainers/samtools:1.10--h2e538c0_3
+            image: samtools_docker
             run: samtools sort ^${INPUT} > ${OUTPUT_FULL} 2> ${LOG_FULL}/${OUTPUT_BASE}-samtools-sort.stderr
 
   stringtie:
@@ -117,6 +121,8 @@ apps:
        gtf:
      parameters:
        output:
+     images:
+       stringtie_docker: quay.io/biocontainers/stringtie:2.1.6--h978d192_0
      execution:
        pre:
        - run: mkdir -p ${OUTPUT_FULL}
@@ -127,7 +133,7 @@ apps:
          - in_path: docker
          commands:
          - type: docker
-           image: quay.io/biocontainers/stringtie:2.1.6--h978d192_0
+           image: stringtie_docker
            run: >-
              stringtie -G ^${GTF} --rf -e -B -o ^${OUTPUT_FULL}/${OUTPUT_BASE}_final_transcript.gtf
              -A ^${OUTPUT_FULL}/${OUTPUT_BASE}.tsv -C ^${OUTPUT_FULL}/${OUTPUT_BASE}_final_reference.gtf ^${BAM} 
@@ -137,14 +143,14 @@ apps:
 # steps
 steps:
   build:
-    app: hisat2-build
+    app: hisat2_build
     depend: []
     template:
       reference: ${workflow->reference}
       output: reference
 
   align:
-    app: hisat2-align
+    app: hisat2_align
     depend: [ "build" ]
     map:
       uri: ${workflow->reads}
@@ -157,7 +163,7 @@ steps:
       output: ${1}.sam
 
   sort:
-    app: bam-sort
+    app: bam_sort
     depend: [ "align" ]
     map:
       uri: ${align->output}
@@ -176,4 +182,5 @@ steps:
       bam: ${sort->output}/${1}.bam
       gtf: ${workflow->gtf}
       output: ${1}
+    publish: true
 ...
